@@ -4,6 +4,6 @@
 - GitHubリポジトリURL：https://github.com/nookstudiojp/recsort
 - 公開デモ：https://recsort-studio.alikemerit.chatgpt.site/
 - プレゼン動画：別途作成・先生へ共有済み。
-- スライド資料：[提出用PDF](docs/RecSort-slides.pdf)、[編集用PowerPoint](docs/RecSort-slides.pptx)（本編6枚＋質疑応答4枚・発表ノート付き）。
+- スライド資料：[提出用PDF](docs/RecSort-slides.pdf)（本編6枚＋質疑応答4枚）。
 
 GitHubでは公開リポジトリとして共有しています。
