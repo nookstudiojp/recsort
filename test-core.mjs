@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {reasons,isVideo,formatSize,makeCSV,demoRecords,csvCell} from './dist/core.mjs';
+const now=Date.now(),r=demoRecords(now);
+assert.equal(r.length,6);assert.equal(r.filter(x=>reasons(x,90,2,now).length).length,4);
+assert.equal(reasons(r[1],90,2,now).length,0);assert.equal(reasons(r[2],90,2,now).length,1);
+assert.equal(isVideo('TEST.MP4'),true);assert.equal(isVideo('ignore.txt'),false);
+assert.deepEqual(formatSize(1024**3),['1','GB']);
+assert.equal(reasons({...r[0],modified:now+86400000,size:1},1,2,now).length,0);
+assert.equal(csvCell('=HYPERLINK("bad")'),'"\'=HYPERLINK(""bad"")"');
+assert.ok(makeCSV([{...r[0],path:'a,"b".mp4'}],90,2,now).includes('"a,""b"".mp4"'));
+assert.ok(makeCSV(r,90,2,now).startsWith('\uFEFF'));
+assert.equal(isVideo('asset','video/quicktime'),true);
+assert.equal(isVideo('photo.HEIC','image/heic'),false);
+console.log('12 core assertions passed');
