@@ -14,41 +14,13 @@ Nook Studioによる録画整理支援アプリの学校提出用プロトタイ
 
 「録画で容量がいっぱいなので、削除をおすすめしてほしい」という課題から、容量・最終更新日時を一覧にし、整理候補を理由付きで示すシステムを設計しました。大切な録画は残し、迷うものは保留にし、最後は利用者が確認できるようにしています。Web版は動画を削除せず、CSVの整理リストを保存します。リスト保存だけでは空き容量は増えません。
 
-## 必要な環境
+## 公開サイトでの使い方
 
-- Python 3.12以降を推奨（ローカル配信用。今回の起動確認は3.12.14）
-- JavaScript・ES Modules・HTML dialogに対応したブラウザ（Chrome / Edge / Safariなどを想定。すべての組み合わせは未検証）
-- Web版には追加のPythonライブラリ、npmパッケージ、APIキー、データベースは不要です。
+1. [RecSortを開く](https://recsort-studio.alikemerit.chatgpt.site/)。
+2. 「サンプルでお試し」で、実動画を用意せず機能を確認できます。
+3. 自分の動画を使う場合は、PCでフォルダや個別ファイル、スマホで写真ライブラリ向けのボタンから選択します。
 
-Windows/macOS向けの起動手順を用意しています。全OS・全ブラウザの動作保証はしていません。iPhoneの写真ライブラリ選択は実機未検証です。
-
-## 起動方法
-
-GitHubの「Code」から「Download ZIP」で取得し、ZIPを解凍してください。README.mdのあるフォルダでターミナルを開きます。HTMLファイルの直接ダブルクリックではなく、次のHTTPサーバー経由で開きます。
-
-### Windows
-
-Python未導入の場合は https://www.python.org/downloads/ からPython 3を導入します。
-
-```powershell
-py -3 --version
-py -3 start.py
-```
-
-`py`が使えず`python`でPython 3が起動できる場合は、`python start.py`でも構いません。
-
-### macOS
-
-Python 3がなければ上記の公式サイトから導入してください。
-
-```sh
-python3 --version
-python3 start.py
-```
-
-起動後、ブラウザで **http://127.0.0.1:8765** を開きます。このURLは自分のPC専用で、サーバー起動中だけ開けます。公開デモを使うだけならPythonの導入は不要です。停止はターミナルでCtrl+C。8765番が使用中なら `python3 start.py --port 8766`（Windowsは `py -3 start.py --port 8766`）を実行し、表示されたURLを開きます。
-
-標準機能だけで起動する代替コマンド：`python3 -m http.server 8765 --bind 127.0.0.1 --directory dist`。
+ブラウザから利用できます。公開サイトを利用するためのPython導入・コードのダウンロード・ターミナル操作は不要です。JavaScript・ES Modules・HTML dialogに対応したブラウザを想定しています。全OS・全ブラウザの動作保証はしておらず、iPhone実機での写真ライブラリ選択は未検証です。
 
 ## 先生向け：実動画なしで試す手順
 
@@ -79,10 +51,10 @@ PCはフォルダまたは個別ファイルを選択します。スマホ幅で
   decisions.mjs：判断のキー、保存情報の読み取り、選択可否
   localStorage：判断のみ保存
   Blob / File API：選択したファイルとCSVを端末内で処理
-Python HTTPサーバー：静的ファイルの配信のみ
+公開サイト：静的ファイルを配信。動画処理はブラウザ内。
 ```
 
-`dist/`がブラウザ向けのソース一式です。ビルドによる生成物ではなく、そのまま読めるHTML/CSS/JavaScriptを収めています。[start.py](start.py)は起動補助です。[要件・設計・制限](docs/DESIGN.md)も記載しています。
+`dist/`がブラウザ向けのソース一式です。ビルドによる生成物ではなく、そのまま読めるHTML/CSS/JavaScriptを収めています。コードレビュー用の[ローカル起動手順](docs/LOCAL_SETUP.md)を別途用意しています。[要件・設計・制限](docs/DESIGN.md)も記載しています。
 
 ## 候補判定
 
