@@ -11,4 +11,4 @@ assert.ok(makeCSV([{...r[0],path:'a,"b".mp4'}],90,2,now).includes('"a,""b"".mp4"
 assert.ok(makeCSV(r,90,2,now).startsWith('\uFEFF'));
 assert.equal(isVideo('asset','video/quicktime'),true);
 assert.equal(isVideo('photo.HEIC','image/heic'),false);
-console.log('12 core assertions passed');
+console.log('13 core assertions passed');
