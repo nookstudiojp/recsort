@@ -1,0 +1,23 @@
+import Foundation
+let rows = VideoRecord.demo(1700)
+precondition(rows.count == 1700)
+precondition(Set(rows.map(\.id)).count == 1700)
+let sorted = VideoRules.ordered(rows, by: .size)
+precondition(zip(sorted, sorted.dropFirst()).allSatisfy { ($0.bytes ?? -1) >= ($1.bytes ?? -1) })
+let dates = VideoRules.ordered(rows, by: .oldest)
+precondition(zip(dates, dates.dropFirst()).allSatisfy { ($0.created ?? .distantFuture) <= ($1.created ?? .distantFuture) })
+let favorite = rows.first { $0.favorite }!
+precondition(!VideoRules.eligible(favorite, decisions: [:]))
+let normal = rows.first { !$0.favorite }!
+precondition(!VideoRules.eligible(normal, decisions: [normal.id: SavedDecision(value: .keep, due: nil)]))
+precondition(VideoRules.eligible(normal, decisions: [normal.id: SavedDecision(value: .later, due: Date())]))
+let unknown = VideoRecord(id: "unknown", name: "cloud", created: nil, modified: nil, bytes: nil, duration: 1, favorite: false)
+precondition(VideoRules.reasons(unknown).isEmpty)
+precondition(VideoRules.size(nil) == "容量未確認")
+let saved = SavedDecision(value: .later, due: Date(timeIntervalSince1970: 1000))
+let decoded = try JSONDecoder().decode(SavedDecision.self, from: JSONEncoder().encode(saved))
+precondition(decoded == saved)
+let old = VideoRecord(id: "old", name: "old", created: Date(timeIntervalSince1970: 0), modified: nil, bytes: nil, duration: 1, favorite: false)
+precondition(!VideoRules.candidate(old, decisions: [old.id: SavedDecision(value: .later, due: Date().addingTimeInterval(86400))]))
+precondition(VideoRules.candidate(old, decisions: [old.id: SavedDecision(value: .later, due: Date(timeIntervalSince1970: 0))]))
+print("12 iOS model assertions passed, including 1700 synthetic records")

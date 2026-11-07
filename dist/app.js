@@ -1,8 +1,13 @@
+import {readReviewDates,reviewDue,nextFive,makeSnapshot,readSnapshot,storedFolder} from './workflow.mjs';
 import {isVideo,reasons,formatSize,makeCSV,demoRecords} from './core.mjs';
 import {decisionKey,getDecision,canSelect,readDecisions,setDecision} from './decisions.mjs';
 import {scanDirectory,deleteConfirmed} from './file-access.mjs';
 const $=id=>document.getElementById(id);
-const STORAGE_KEY='recsort-decisions-v1';
+const STORAGE_KEY='recsort-decisions-v1',REVIEW_KEY='recsort-review-dates-v1',SNAPSHOT_KEY='recsort-library-snapshot-v1';
+let savedReviewDates={},demoReviewDates={},lastSnapshot=null,rememberedRoot=null;
+try{savedReviewDates=readReviewDates(localStorage.getItem(REVIEW_KEY));lastSnapshot=readSnapshot(localStorage.getItem(SNAPSHOT_KEY));}catch{}
+const reviewDates=()=>mode==='demo'?demoReviewDates:savedReviewDates;
+const saveReviewDates=()=>{if(mode!=='demo')try{localStorage.setItem(REVIEW_KEY,JSON.stringify(savedReviewDates));}catch{storageOK=false;}};
 let savedDecisions=Object.create(null),demoDecisions=Object.create(null),storageOK=true;
 try{savedDecisions=readDecisions(localStorage.getItem(STORAGE_KEY));}catch{storageOK=false;}
 let view='all',page=0,activeRecord=null,undo=null,toastTimer=null;
@@ -10,7 +15,7 @@ const PAGE_SIZE=50;
 const decisions=()=>mode==='demo'?demoDecisions:savedDecisions;
 const decision=r=>getDecision(r,decisions());
 const selectable=r=>canSelect(r,decisions());
-const isCandidate=(r,days,gb)=>selectable(r)&&reasons(r,days,gb).length>0;
+const isCandidate=(r,days,gb)=>selectable(r)&&(decision(r)!=='later'||reviewDue(r,decisions(),reviewDates()))&&reasons(r,days,gb).length>0;
 const chosenRecords=()=>records.filter(r=>selected.has(r.id)&&selectable(r));
 function saveDecisions(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(savedDecisions));storageOK=true;}catch{storageOK=false;}}
 function showToast(message,allowUndo=true){clearTimeout(toastTimer);$('toastText').textContent=message;$('undoButton').hidden=!allowUndo;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},8000);}
@@ -31,12 +36,20 @@ function updateSelection(){
   $('selectAll').disabled=!eligible.length;
   $('selectAll').checked=eligible.length>0&&eligible.every(r=>selected.has(r.id));
   $('selectAll').indeterminate=eligible.some(r=>selected.has(r.id))&&!$('selectAll').checked;
-  const hidden=chosen.filter(r=>!visible.some(v=>v.id===r.id)).length;
+  const visibleIDs=new Set(visible.map(r=>r.id));const hidden=chosen.filter(r=>!visibleIDs.has(r.id)).length;
   $('hiddenSelection').textContent=hidden?`うち非表示 ${hidden} 件`:'';
 }
 function render(){
   const [days,gb]=thresholds();
   const candidates=records.filter(r=>isCandidate(r,days,gb));
+  const due=records.filter(r=>reviewDue(r,decisions(),reviewDates()));
+  $('coachTitle').textContent=due.length?`見直し時期の動画が ${due.length} 件あります。`:'まずは5本、見直そう。';
+  $('coachText').textContent=mode==='snapshot'?'保存した一覧を表示中。再生・削除は元動画を選び直してから。':`${records.filter(r=>decision(r)==='keep').length} 件を「残す」に設定。期限が来ても自動で削除しません。`;
+  $('dueReview').disabled=!due.length;$('dueReview').textContent=`見直し時期 ${due.length} 件を見る`;
+  $('nextFive').disabled=!nextFive(records,decisions(),reviewDates(),r=>isCandidate(r,days,gb)).length;
+  $('saveList').disabled=mode==='demo'||!records.length;$('restoreList').disabled=!lastSnapshot;
+  $('rememberFolder').hidden=!accessRoot;$('forgetFolder').hidden=!rememberedRoot;
+
   $('totalCount').replaceChildren(document.createTextNode(records.length+' '),element('small','件'));
   $('candidateCount').replaceChildren(document.createTextNode(candidates.length+' '),element('small','件'));
   metric('totalSize',records.reduce((s,r)=>s+r.size,0));metric('candidateSize',candidates.reduce((s,r)=>s+r.size,0));
@@ -44,17 +57,18 @@ function render(){
   $('keepPill').textContent=records.filter(r=>decision(r)==='keep').length;
   $('laterPill').textContent=records.filter(r=>decision(r)==='later').length;
   for(const [id,value] of [['allView','all'],['candidateView','candidate'],['keepView','keep'],['laterView','later']]){
-    $(id).classList.toggle('active',view===value);$(id).setAttribute('aria-pressed',String(view===value));
+    $(id).classList.toggle('active',(view===value||(view==='due'&&value==='later')));$(id).setAttribute('aria-pressed',String(view===value||(view==='due'&&value==='later')));
   }
   const total=records.reduce((sum,r)=>sum+r.size,0),candidateBytes=candidates.reduce((sum,r)=>sum+r.size,0),kept=records.filter(r=>decision(r)==='keep'),keptBytes=kept.reduce((sum,r)=>sum+r.size,0);
   $('storageSummary').hidden=!records.length;
   $('candidateBar').style.width=(total?candidateBytes/total*100:0)+'%';$('keptBar').style.width=(total?keptBytes/total*100:0)+'%';
   $('storageText').textContent=`整理候補 ${units(candidateBytes)}（${total?Math.round(candidateBytes/total*100):0}%） / 残す ${units(keptBytes)} / その他 ${units(total-candidateBytes-keptBytes)}`;
   const query=$('search').value.trim().toLocaleLowerCase();
-  let filtered=records.filter(r=>(view==='all'||(view==='candidate'?isCandidate(r,days,gb):decision(r)===view))&&r.path.toLocaleLowerCase().includes(query));
+  let filtered=records.filter(r=>(view==='all'||(view==='candidate'?isCandidate(r,days,gb):view==='due'?reviewDue(r,decisions(),reviewDates()):decision(r)===view))&&r.path.toLocaleLowerCase().includes(query));
   const sort=$('sort').value;
   filtered.sort((a,b)=>sort==='size-desc'?b.size-a.size:sort==='date-asc'?a.modified-b.modified:sort==='name'?a.name.localeCompare(b.name,'ja'):b.modified-a.modified);
   matching=filtered;
+  $('nextFive').disabled=!nextFive(matching,decisions(),reviewDates(),r=>isCandidate(r,days,gb)).length;
   const bulkCandidates=matching.filter(r=>isCandidate(r,days,gb));
   $('selectCandidates').disabled=!bulkCandidates.length;
   $('selectCandidates').textContent=bulkCandidates.length?`候補 ${bulkCandidates.length} 件をまとめて選ぶ`:'候補だけをまとめて選ぶ';
@@ -71,14 +85,14 @@ function render(){
     tr.append(element('td',units(r.size),'size-cell'),element('td',new Date(r.modified).toLocaleDateString('ja-JP')+' '+new Date(r.modified).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}),'date-cell'));
     const reasonCell=element('td');const why=reasons(r,days,gb);
     if(decision(r)==='keep')reasonCell.append(element('span','♡ 残す・候補から除外','reason kept'));
-    else{if(decision(r)==='later')reasonCell.append(element('span','◷ あとで確認','reason later'));if(why.length)why.forEach(reason=>reasonCell.append(element('span',reason,'reason')));else if(decision(r)!=='later')reasonCell.append(element('span','—','no-reason'));}tr.append(reasonCell);
+    else{if(decision(r)==='later'){const due=reviewDates()[decisionKey(r)];reasonCell.append(element('span',reviewDue(r,decisions(),reviewDates())?'◷ 見直し時期':`◷ ${new Date(due).toLocaleDateString('ja-JP')}に見直す`,'reason later'));}if(why.length)why.forEach(reason=>reasonCell.append(element('span',reason,'reason')));else if(decision(r)!=='later')reasonCell.append(element('span','—','no-reason'));}tr.append(reasonCell);
     const action=element('td');const play=element('button','詳細 ↗','play-button');play.setAttribute('aria-label',r.name+'の詳細を開く');play.title='プレビューと整理の判断';play.addEventListener('click',()=>preview(r));action.append(play);tr.append(action);fragment.append(tr);
   }
   $('rows').replaceChildren(fragment);$('empty').hidden=visible.length>0;
   if(records.length&&!visible.length){$('empty').querySelector('h3').textContent='条件に合う動画がありません';$('empty').querySelector('p').textContent='検索語や候補の条件を変えてみてください。';$('emptyDemo').hidden=true;}
   else{$('empty').querySelector('h3').textContent='録画のお片づけ、はじめよう。';$('empty').querySelector('p').textContent='動画を選ぶと、容量や見直し候補がひと目で分かります。';$('emptyDemo').hidden=false;}
   $('visibleCount').textContent=`${filtered.length} / ${records.length} 件に一致 · ${visible.length} 件を表示`;
-  $('modeBadge').textContent=mode==='demo'?'DEMO':mode==='local'?'LOCAL':'未選択';$('modeBadge').classList.toggle('demo',mode==='demo');updateSelection();
+  $('modeBadge').textContent=mode==='demo'?'DEMO':mode==='local'?'LOCAL':mode==='snapshot'?'保存一覧':'未選択';$('modeBadge').classList.toggle('demo',mode==='demo');updateSelection();
 }
 function resetFilters(){selected.clear();$('sort').value='size-desc';$('search').value='';view='all';page=0;undo=null;$('toast').hidden=true;}
 function loadDemo(){if(deleteBusy||scanBusy)return;accessRoot=null;loadSequence++;records=demoRecords(1793664000000);mode='demo';resetFilters();$('folderLabel').textContent='サンプル録画 / 6件の架空のライブラリ';$('status').textContent='デモモード：実ファイルはありません。候補の条件変更や整理リストの保存を試せます。';render();}
@@ -126,7 +140,7 @@ $('consent').addEventListener('change',()=>{$('exportButton').disabled=!$('conse
 $('exportButton').addEventListener('click',()=>{
   if(!$('consent').checked)return;const chosen=chosenRecords();if(!chosen.length)return;
   if(exportURL)URL.revokeObjectURL(exportURL);
-  exportURL=URL.createObjectURL(new Blob([makeCSV(chosen,...thresholds(),Date.now(),decisions())],{type:'text/csv;charset=utf-8'}));
+  exportURL=URL.createObjectURL(new Blob([makeCSV(chosen,...thresholds(),Date.now(),decisions(),reviewDates())],{type:'text/csv;charset=utf-8'}));
   const a=document.createElement('a');a.href=exportURL;a.download=`RecSort-${mode==='demo'?'demo-':''}${new Date().toISOString().slice(0,10)}.csv`;document.body.append(a);a.click();a.remove();
   $('reviewDialog').close();$('status').textContent='整理リストを保存しました。動画の削除・移動は行っていません。';
 });
@@ -134,7 +148,7 @@ function preview(record){
   activeRecord=record;if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null;}
   $('previewTitle').textContent=record.name;$('video').hidden=!record.file;
   if(record.file){previewURL=URL.createObjectURL(record.file);$('video').src=previewURL;}
-  $('previewStatus').textContent=record.file?'ブラウザが対応する形式のみ再生できます。動画を外部に送信しません。':'デモの架空データです。実際の動画はありません。フォルダを選ぶとプレビューできます。';
+  $('previewStatus').textContent=record.file?'ブラウザが対応する形式のみ再生できます。動画を外部に送信しません。':(mode==='snapshot'?'保存した一覧です。再生・削除には元動画を選び直してください。':'デモの架空データです。実際の動画はありません。フォルダを選ぶとプレビューできます。');
   const dl=$('previewDetails');dl.replaceChildren();
   for(const [label,value] of [['ファイル',record.path],['容量',units(record.size)],['最終更新',new Date(record.modified).toLocaleString('ja-JP')],['形式',record.file?.type||record.name.split('.').pop().toUpperCase()]])dl.append(element('dt',label),element('dd',value));
   $('previewReasons').replaceChildren(...reasons(record,...thresholds()).map(reason=>element('span',reason,'reason')));
@@ -143,13 +157,14 @@ function preview(record){
 function updateInspector(){
   if(!activeRecord)return;const value=decision(activeRecord);
   $('decisionPersistence').textContent=mode==='demo'?'デモ中の判断はこのページ内だけで保持します。実ファイルには影響しません。':storageOK?'判断はこのブラウザに保存。同じフォルダを読み込むと引き継ぎます。':'この環境では判断を保存できません。ページを閉じると判断は消えます。';
-  $('decisionFeedback').textContent=value==='keep'?'「残す」に設定済み。候補と整理リストの選択から除外しています。':value==='later'?'「あとで確認」に設定済み。左の一覧から見返せます。':'まだ判断していない録画です。';
+  $('decisionFeedback').textContent=value==='keep'?'「残す」に設定済み。候補と整理リストの選択から除外しています。':value==='later'?`見直し日：${reviewDates()[decisionKey(activeRecord)]?new Date(reviewDates()[decisionKey(activeRecord)]).toLocaleDateString('ja-JP'):'未設定・見直し対象'}。期限が来ても自動削除しません。`:'まだ判断していない録画です。';
   $('inspectorUndo').disabled=!undo||undo.mode!==mode;
   for(const [id,key] of [['markKeep','keep'],['markLater','later'],['markNone','none']]){$(id).classList.toggle('chosen',value===key);$(id).setAttribute('aria-pressed',String(value===key));}
 }
 function applyDecision(value){
   if(!activeRecord)return;
-  undo={record:activeRecord,previous:decision(activeRecord),selection:new Set(selected),mode};
+  undo={record:activeRecord,previous:decision(activeRecord),previousDue:reviewDates()[decisionKey(activeRecord)],selection:new Set(selected),mode};
+  const key=decisionKey(activeRecord);if(value==='later')reviewDates()[key]=Date.now()+Number($('reviewDays').value)*86400000;else delete reviewDates()[key];saveReviewDates();
   if(mode==='demo')demoDecisions=setDecision(activeRecord,demoDecisions,value);
   else{savedDecisions=setDecision(activeRecord,savedDecisions,value);saveDecisions();}
   if(value==='keep')selected.delete(activeRecord.id);
@@ -162,6 +177,7 @@ function undoDecision(){
   if(!undo||undo.mode!==mode)return;
   if(mode==='demo')demoDecisions=setDecision(undo.record,demoDecisions,undo.previous);
   else{savedDecisions=setDecision(undo.record,savedDecisions,undo.previous);saveDecisions();}
+  if(undo.previousDue===undefined)delete reviewDates()[decisionKey(undo.record)];else reviewDates()[decisionKey(undo.record)]=undo.previousDue;saveReviewDates();
   selected=new Set(undo.selection);undo=null;render();updateInspector();showToast('直前の判断を元に戻しました。',false);
 }
 $('undoButton').addEventListener('click',undoDecision);$('inspectorUndo').addEventListener('click',undoDecision);
@@ -171,12 +187,11 @@ render();
 
 const accessSupported=window.isSecureContext&&typeof window.showDirectoryPicker==='function';
 $('accessFolderButton').hidden=!accessSupported;
-function sourceBusy(busy){for(const id of ['accessFolderButton','folderButton','filesButton','photosButton','demoButton','emptyDemo'])$(id).disabled=busy;}
-$('accessFolderButton').addEventListener('click',async()=>{
+function sourceBusy(busy){for(const id of ['accessFolderButton','folderButton','filesButton','photosButton','demoButton','emptyDemo','rememberFolder','reopenFolder','saveList','restoreList','forgetList','forgetFolder'])$(id).disabled=busy;}
+async function loadAccessRoot(root){
  if(deleteBusy||scanBusy)return;
+ scanBusy=true;sourceBusy(true);const sequence=++loadSequence;
  try{
-  const root=await window.showDirectoryPicker({mode:'read'});
-  scanBusy=true;sourceBusy(true);const sequence=++loadSequence;
   $('status').textContent='フォルダの動画情報を読み込み中…';
   const next=await scanDirectory(root,isVideo,{onProgress:n=>{if(n%50===0)$('status').textContent=`動画 ${n} 件を読み込み中…`;}});
   if(sequence!==loadSequence)return;
@@ -184,8 +199,12 @@ $('accessFolderButton').addEventListener('click',async()=>{
   $('folderLabel').textContent=root.name+' / PC削除対応フォルダ';
   $('status').textContent=`動画 ${records.length} 件を読み込みました。読めなかった動画 ${next.skipped} 件。削除時には書き込み許可と最終確認が必要です。`;
   render();
- }catch(error){if(error.name!=='AbortError')$('status').textContent='フォルダを開けませんでした。対応PCのChrome／Edgeで再試行するか、通常のフォルダ選択をご利用ください。';}
- finally{scanBusy=false;sourceBusy(false);}
+ }finally{scanBusy=false;sourceBusy(false);render();}
+}
+$('accessFolderButton').addEventListener('click',async()=>{
+ if(deleteBusy||scanBusy)return;
+ try{const root=await window.showDirectoryPicker({mode:'read'});await loadAccessRoot(root);}
+ catch(error){if(error.name!=='AbortError')$('status').textContent='フォルダを開けませんでした。対応PCのChrome／Edgeか、通常のフォルダ選択をご利用ください。';}
 });
 $('deleteConsent').addEventListener('change',()=>{$('deleteButton').disabled=deleteBusy||!$('deleteConsent').checked;});
 $('stopDelete').addEventListener('click',()=>{deleteAbort?.abort();$('stopDelete').disabled=true;$('deleteProgress').textContent='実行中の1件が終わり次第、残りを中止します。';});
@@ -219,3 +238,15 @@ $('deleteButton').addEventListener('click',async()=>{
   $('deleteSection').hidden=!reviewRecords.length;$('consent').checked=false;$('exportButton').disabled=true;
  }
 });
+
+$('nextFive').addEventListener('click',()=>{selected=new Set(nextFive(matching,decisions(),reviewDates(),r=>isCandidate(r,...thresholds())).map(r=>r.id));render();$('status').textContent=`${selected.size} 件を選びました。選択は削除ではありません。内容を確認し、残す・保留・整理を判断してください。`;});
+$('dueReview').addEventListener('click',()=>{view='due';page=0;$('sort').value='date-asc';render();$('status').textContent='見直し時期になった動画だけを表示しています。';});
+$('saveList').addEventListener('click',()=>{if(mode==='demo'||!records.length)return;try{const raw=makeSnapshot(records,$('folderLabel').textContent);localStorage.setItem(SNAPSHOT_KEY,raw);lastSnapshot=readSnapshot(raw);render();$('status').textContent='名前・容量・日時をこのブラウザに保存しました。動画本体は保存していません。';}catch{$('status').textContent='一覧を保存できませんでした。保存領域やブラウザの設定を確認してください。';}});
+$('restoreList').addEventListener('click',()=>{if(!lastSnapshot||deleteBusy||scanBusy)return;loadSequence++;accessRoot=null;mode='snapshot';records=lastSnapshot.records.map(r=>({...r}));resetFilters();$('folderLabel').textContent=lastSnapshot.label+' / '+new Date(lastSnapshot.saved).toLocaleString('ja-JP')+'時点';$('status').textContent='保存した一覧です。実際のファイルの有無や容量は再確認していません。動画を選び直すと再生・実ファイルの操作ができます。';render();});
+$('forgetList').addEventListener('click',()=>{try{localStorage.removeItem(SNAPSHOT_KEY);lastSnapshot=null;render();$('status').textContent='保存した一覧を消しました。元動画と「残す・保留」の判断は変更していません。';}catch{$('status').textContent='保存した一覧を消せませんでした。ブラウザのサイトデータ設定を確認してください。';}});
+$('rememberFolder').addEventListener('click',async()=>{if(!accessRoot)return;try{await storedFolder('put',accessRoot);rememberedRoot=accessRoot;$('reopenFolder').hidden=false;render();$('status').textContent='このブラウザにフォルダの参照を保存しました。次回は「前回のフォルダを開く」から再許可して読み込めます。';}catch{$('status').textContent='この環境ではフォルダを記憶できません。一覧の保存または通常の選択をご利用ください。';}});
+$('reopenFolder').addEventListener('click',async()=>{if(!rememberedRoot||deleteBusy||scanBusy)return;try{if(await rememberedRoot.requestPermission({mode:'read'})!=='granted'){$('status').textContent='読み込みを許可しなかったため、フォルダは開いていません。';return;}await loadAccessRoot(rememberedRoot);}catch{$('status').textContent='前回のフォルダを開けません。移動・削除や許可の変更を確認し、フォルダを選び直してください。';}});
+$('forgetFolder').addEventListener('click',async()=>{try{await storedFolder('clear');rememberedRoot=null;$('reopenFolder').hidden=true;render();$('status').textContent='保存したフォルダの参照を解除しました。OS側の許可取り消しはブラウザのサイト設定から行えます。';}catch{$('status').textContent='参照を解除できませんでした。ブラウザのサイトデータ設定を確認してください。';}});
+if(accessSupported)storedFolder('get').then(root=>{if(root){rememberedRoot=root;$('reopenFolder').hidden=false;$('forgetFolder').hidden=false;}}).catch(()=>{});
+$('guideButton').addEventListener('click',()=>$('guideDialog').showModal());
+$('downloadFeedback').addEventListener('click',()=>{const text='RecSort 利用メモ（未送信）\n\n整理できない理由：\n'+$('researchReason').value+'\n\n圧縮・クラウドを使わない理由：\n'+$('researchAlternative').value+'\n\n改善・有料利用の条件：\n'+$('researchValue').value;const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='RecSort-feedback.txt';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);});

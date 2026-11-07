@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {makeSnapshot,readSnapshot,nextFive,reviewDue,readReviewDates} from './dist/workflow.mjs';
+import {setDecision,decisionKey} from './dist/decisions.mjs';
+import {isVideo,reasons,makeCSV} from './dist/core.mjs';
+import {scanDirectory} from './dist/file-access.mjs';
+let count=0;
+const test=async(name,fn)=>{await fn();console.log('PASS',name);count++;};
+const rows=Array.from({length:1700},(_,i)=>({id:String(i),name:i+'.mp4',path:'folder/'+i+'.mp4',size:i*1e6,modified:0}));
+await test('1700 metadata roundtrip excludes file handles',()=>{const snap=readSnapshot(makeSnapshot(rows.map(r=>({...r,file:{secret:'video'},handle:'handle'})),'folder'));assert.equal(snap.records.length,1700);assert.equal(snap.records[0].file,null);assert.ok(!('handle' in snap.records[0]));});
+await test('invalid snapshot rejected',()=>{assert.equal(readSnapshot('{bad'),null);assert.equal(readSnapshot('{"version":9}'),null);});
+await test('invalid and extreme timestamps filtered',()=>{const raw=JSON.stringify({version:1,saved:1,records:[{name:'a',path:'a',size:-1,modified:1},{name:'b',path:'b',size:1,modified:1e30}]});assert.equal(readSnapshot(raw).records.length,0);});
+await test('review dates validation',()=>{assert.deepEqual(readReviewDates('{"__proto__":9,"bad":1}'),{});});
+await test('later becomes due at deadline only',()=>{const r=rows[1],d=setDecision(r,{},'later'),dates={[decisionKey(r)]:100};assert.equal(reviewDue(r,d,dates,99),false);assert.equal(reviewDue(r,d,dates,100),true);});
+await test('legacy later without deadline is surfaced',()=>{assert.equal(reviewDue(rows[0],setDecision(rows[0],{},'later'),{},1),true);});
+await test('five includes due first and excludes keep and future later',()=>{let d=setDecision(rows[1699],{},'keep');d=setDecision(rows[1698],d,'later');d=setDecision(rows[0],d,'later');const dates={[decisionKey(rows[1698])]:200};const result=nextFive(rows,d,dates,()=>true,100);assert.equal(result.length,5);assert.equal(result[0].id,'0');assert.ok(!result.some(r=>['1699','1698'].includes(r.id)));});
+await test('1700 scanner benchmark',async()=>{const start=performance.now();const root={name:'test',async *values(){for(const r of rows)yield {kind:'file',name:r.name,async getFile(){return {name:r.name,size:r.size,lastModified:r.modified};}};}};const result=await scanDirectory(root,isVideo);const candidates=result.records.filter(r=>reasons(r,90,2,1000000000000).length);const first=nextFive(candidates,{}, {},()=>true);assert.equal(result.records.length,1700);assert.equal(first.length,5);console.log('1700 mock records, scan/filter/choose:',Math.round(performance.now()-start)+'ms (not iPhone performance)');});
+await test('CSV carries the review deadline',()=>{const r=rows[0];const csv=makeCSV([r],90,2,100,setDecision(r,{},'later'),{[decisionKey(r)]:1000});assert.ok(csv.includes('見直し日'));assert.ok(csv.includes('1970-01-01T00:00:01.000Z'));});
+console.log(count+' workflow scenarios passed');
