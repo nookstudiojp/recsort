@@ -1,5 +1,6 @@
 import {isVideo,reasons,formatSize,makeCSV,demoRecords} from './core.mjs';
 import {decisionKey,getDecision,canSelect,readDecisions,setDecision} from './decisions.mjs';
+import {scanDirectory,deleteConfirmed} from './file-access.mjs';
 const $=id=>document.getElementById(id);
 const STORAGE_KEY='recsort-decisions-v1';
 let savedDecisions=Object.create(null),demoDecisions=Object.create(null),storageOK=true;
@@ -14,6 +15,7 @@ const chosenRecords=()=>records.filter(r=>selected.has(r.id)&&selectable(r));
 function saveDecisions(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(savedDecisions));storageOK=true;}catch{storageOK=false;}}
 function showToast(message,allowUndo=true){clearTimeout(toastTimer);$('toastText').textContent=message;$('undoButton').hidden=!allowUndo;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},8000);}
 
+let accessRoot=null,deleteBusy=false,scanBusy=false,deleteAbort=null,reviewRecords=[];
 let records=[],selected=new Set(),mode='empty',matching=[],visible=[],previewURL=null,exportURL=null,loadSequence=0;
 const units=n=>formatSize(n).join(' ');
 const thresholds=()=>[Number($('days').value)||90,Number($('size').value)||2];
@@ -79,9 +81,9 @@ function render(){
   $('modeBadge').textContent=mode==='demo'?'DEMO':mode==='local'?'LOCAL':'未選択';$('modeBadge').classList.toggle('demo',mode==='demo');updateSelection();
 }
 function resetFilters(){selected.clear();$('sort').value='size-desc';$('search').value='';view='all';page=0;undo=null;$('toast').hidden=true;}
-function loadDemo(){loadSequence++;records=demoRecords(1793664000000);mode='demo';resetFilters();$('folderLabel').textContent='サンプル録画 / 6件の架空のライブラリ';$('status').textContent='デモモード：実ファイルはありません。候補の条件変更や整理リストの保存を試せます。';render();}
+function loadDemo(){if(deleteBusy||scanBusy)return;accessRoot=null;loadSequence++;records=demoRecords(1793664000000);mode='demo';resetFilters();$('folderLabel').textContent='サンプル録画 / 6件の架空のライブラリ';$('status').textContent='デモモード：実ファイルはありません。候補の条件変更や整理リストの保存を試せます。';render();}
 async function loadFiles(files,source='files'){
-  const sequence=++loadSequence;let list=Array.from(files);if(!list.length)return;
+  if(deleteBusy||scanBusy)return;accessRoot=null;const sequence=++loadSequence;let list=Array.from(files);if(!list.length)return;
   $('status').textContent='ファイル情報を読み込み中…';
   await new Promise(resolve=>setTimeout(resolve,0));
   let next=[];let skipped=0;
@@ -106,14 +108,16 @@ $('prevPage').addEventListener('click',()=>{page--;render();});$('nextPage').add
 for(const [id,key] of [['sortBig','size-desc'],['sortOld','date-asc'],['sortNew','date-desc']])$(id).addEventListener('click',()=>{$('sort').value=key;page=0;render();});
 $('selectCandidates').addEventListener('click',()=>{
   const [days,gb]=thresholds();selected=new Set(matching.filter(r=>isCandidate(r,days,gb)).map(r=>r.id));render();
-  $('status').textContent=`候補 ${selected.size} 件をまとめて選択しました。内容を確認してから整理リストを保存できます。動画の削除・移動は行いません。`;
+  $('status').textContent=`候補 ${selected.size} 件をまとめて選択しました。内容を確認してから整理リストを保存できます。元動画はまだ変更していません。`;
 });
 $('selectAll').addEventListener('change',e=>{visible.filter(selectable).forEach(r=>e.target.checked?selected.add(r.id):selected.delete(r.id));render();});
 $('clearSelection').addEventListener('click',()=>{selected.clear();render();});
 $('helpButton').addEventListener('click',()=>$('helpDialog').showModal());
 document.querySelectorAll('[data-close]').forEach(button=>button.addEventListener('click',()=>$(button.dataset.close).close()));
 $('reviewButton').addEventListener('click',()=>{
-  const chosen=chosenRecords();if(!chosen.length)return;
+  const chosen=chosenRecords();if(!chosen.length)return;reviewRecords=[...chosen];
+  $('deleteSection').hidden=!accessRoot||!chosen.every(r=>r.root===accessRoot&&r.handle);$('deleteConsent').checked=false;$('deleteButton').disabled=true;$('deleteResults').hidden=true;$('deleteResults').replaceChildren();$('deleteProgress').textContent='';
+  $('reviewNotice').textContent=accessRoot?'CSV保存では元動画を変更しません。下の削除操作は元動画を直接削除します。':'この選び方では元動画を削除しません。CSVを参考に写真アプリなどで整理してください。';
   $('reviewSummary').textContent=`${chosen.length} 件 / 合計 ${units(chosen.reduce((s,r)=>s+r.size,0))}${mode==='demo'?'（デモの架空データ）':''}`;
   const fragment=document.createDocumentFragment();for(const r of chosen){const item=element('div',r.path,'review-item');item.append(element('small',`${units(r.size)} / ${reasons(r,...thresholds()).join('・')||'候補条件には該当しません'} / ${decision(r)==='later'?'あとで確認':'未整理'}`));fragment.append(item);}
   $('reviewList').replaceChildren(fragment);$('consent').checked=false;$('exportButton').disabled=true;$('reviewDialog').showModal();
@@ -164,3 +168,54 @@ $('undoButton').addEventListener('click',undoDecision);$('inspectorUndo').addEve
 $('video').addEventListener('error',()=>{$('previewStatus').textContent='この動画はブラウザで再生できません。PCの動画プレイヤーで確認してください。';});
 $('previewDialog').addEventListener('close',()=>{$('video').pause();$('video').removeAttribute('src');$('video').load();if(previewURL){URL.revokeObjectURL(previewURL);previewURL=null;}});
 render();
+
+const accessSupported=window.isSecureContext&&typeof window.showDirectoryPicker==='function';
+$('accessFolderButton').hidden=!accessSupported;
+function sourceBusy(busy){for(const id of ['accessFolderButton','folderButton','filesButton','photosButton','demoButton','emptyDemo'])$(id).disabled=busy;}
+$('accessFolderButton').addEventListener('click',async()=>{
+ if(deleteBusy||scanBusy)return;
+ try{
+  const root=await window.showDirectoryPicker({mode:'read'});
+  scanBusy=true;sourceBusy(true);const sequence=++loadSequence;
+  $('status').textContent='フォルダの動画情報を読み込み中…';
+  const next=await scanDirectory(root,isVideo,{onProgress:n=>{if(n%50===0)$('status').textContent=`動画 ${n} 件を読み込み中…`;}});
+  if(sequence!==loadSequence)return;
+  records=next.records;mode='local';accessRoot=root;resetFilters();
+  $('folderLabel').textContent=root.name+' / PC削除対応フォルダ';
+  $('status').textContent=`動画 ${records.length} 件を読み込みました。読めなかった動画 ${next.skipped} 件。削除時には書き込み許可と最終確認が必要です。`;
+  render();
+ }catch(error){if(error.name!=='AbortError')$('status').textContent='フォルダを開けませんでした。対応PCのChrome／Edgeで再試行するか、通常のフォルダ選択をご利用ください。';}
+ finally{scanBusy=false;sourceBusy(false);}
+});
+$('deleteConsent').addEventListener('change',()=>{$('deleteButton').disabled=deleteBusy||!$('deleteConsent').checked;});
+$('stopDelete').addEventListener('click',()=>{deleteAbort?.abort();$('stopDelete').disabled=true;$('deleteProgress').textContent='実行中の1件が終わり次第、残りを中止します。';});
+$('reviewDialog').addEventListener('cancel',e=>{if(deleteBusy)e.preventDefault();});
+$('deleteButton').addEventListener('click',async()=>{
+ if(deleteBusy||!$('deleteConsent').checked||!accessRoot||!reviewRecords.length)return;
+ const chosen=[...reviewRecords];
+ if(!chosen.every(r=>records.includes(r)&&r.root===accessRoot&&selectable(r)))return;
+ deleteBusy=true;deleteAbort=new AbortController();sourceBusy(true);
+ const controls=[...$('reviewDialog').querySelectorAll('button,input')];controls.forEach(e=>e.disabled=true);$('stopDelete').hidden=false;$('stopDelete').disabled=false;
+ let results=[];
+ try{
+  // Called directly from the explicit delete-button gesture, never on scan/load.
+  const permission=await accessRoot.requestPermission({mode:'readwrite'});
+  if(permission!=='granted')throw new Error('書き込みが許可されなかったため、削除していません。');
+ if(!window.confirm(`${chosen.length} 件 / ${units(chosen.reduce((n,r)=>n+r.size,0))} の元動画を削除します。\nゴミ箱には入らず、元に戻せない可能性があります。\n確認画面のファイル名を確認しましたか？`))return;
+  results=await deleteConfirmed(chosen,{confirmed:true,isKept:r=>!selectable(r),signal:deleteAbort.signal,onProgress:(n,total)=>{$('deleteProgress').textContent=`${n} / ${total} 件の処理が完了`;}});
+  const removed=new Set(results.filter(r=>!r.error).map(r=>r.record));
+  records=records.filter(r=>!removed.has(r));removed.forEach(r=>selected.delete(r.id));undo=null;
+  const failed=results.filter(r=>r.error);const remaining=chosen.length-results.length;
+  const message=`削除 ${removed.size} 件 / 失敗 ${failed.length} 件 / 未処理 ${remaining} 件。空き容量への反映はOSに依存します。`;
+  $('status').textContent=message;$('deleteProgress').textContent=message;
+  $('deleteResults').replaceChildren(...failed.map(({record,error})=>{const e=element('div',record.path,'review-item');e.append(element('small',error));return e;}));$('deleteResults').hidden=!failed.length;
+  render();
+ }catch(error){$('deleteProgress').textContent=error.message||'削除を開始できませんでした。';}
+ finally{
+  deleteBusy=false;sourceBusy(false);controls.forEach(e=>e.disabled=false);$('stopDelete').hidden=true;$('stopDelete').disabled=false;$('deleteConsent').checked=false;$('deleteButton').disabled=true;
+  reviewRecords=chosen.filter(r=>records.includes(r));
+  const fragment=document.createDocumentFragment();for(const r of reviewRecords){const e=element('div',r.path,'review-item');e.append(element('small',units(r.size)));fragment.append(e);}$('reviewList').replaceChildren(fragment);
+  $('reviewSummary').textContent=`残っている選択 ${reviewRecords.length} 件 / ${units(reviewRecords.reduce((n,r)=>n+r.size,0))}`;
+  $('deleteSection').hidden=!reviewRecords.length;$('consent').checked=false;$('exportButton').disabled=true;
+ }
+});
