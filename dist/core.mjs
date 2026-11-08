@@ -22,7 +22,7 @@ export function csvCell(value) {
   return '"'+s.replaceAll('"','""')+'"';
 }
 export function makeCSV(records,days,gb,now=Date.now(),decisions={},reviewDates={}) {
-  const rows=[['ファイルパス','容量（バイト）','最終更新日時','整理候補の理由','判断','見直し日'],...records.map(r=>[r.path,r.size,new Date(r.modified).toISOString(),reasons(r,days,gb,now).join(' / ')||'条件該当なし',({keep:'残す',later:'あとで確認',none:'未整理'})[getDecision(r,decisions)],getDecision(r,decisions)==='later'&&Number.isFinite(reviewDates[JSON.stringify([r.path,r.size,r.modified])])?new Date(reviewDates[JSON.stringify([r.path,r.size,r.modified])]).toISOString():''])];
+  const rows=[['ファイルパス','容量（バイト）','最終更新日時','整理候補の理由','判断','見直し日','完全一致（照合時点）'],...records.map(r=>[r.path,r.size,new Date(r.modified).toISOString(),reasons(r,days,gb,now).join(' / ')||'条件該当なし',({keep:'残す',later:'あとで確認',none:'未整理'})[getDecision(r,decisions)],getDecision(r,decisions)==='later'&&Number.isFinite(reviewDates[JSON.stringify([r.path,r.size,r.modified])])?new Date(reviewDates[JSON.stringify([r.path,r.size,r.modified])]).toISOString():'',r.exactDuplicateGroup||''])];
   return '\uFEFF'+rows.map(row=>row.map(csvCell).join(',')).join('\r\n');
 }
 export function demoRecords(now=Date.now()) {

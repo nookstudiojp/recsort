@@ -14,6 +14,15 @@ final class LibraryStore: NSObject, ObservableObject, PHPhotoLibraryChangeObserv
     @Published var measuring = false
     @Published var deleting = false
     @Published var reviewing = false
+    @Published var mediaBusy = false
+    @Published var exportResult: ExportedVideo?
+    @Published var exportMessage = "元動画を残したコピーを作ります。"
+    @Published var exportSaved = false
+    @Published var savingExport = false
+    private var mediaRequest: PHImageRequestID?
+    private var exportOperation: VideoExportOperation?
+    private var exportCancelled = false
+    private var temporaryExport: URL?
     private var pendingRefresh = false
     private var lastAction = ""
     @Published var player: AVPlayer?
@@ -46,7 +55,7 @@ final class LibraryStore: NSObject, ObservableObject, PHPhotoLibraryChangeObserv
         message = "デモ：\(count)件の架空の動画です。実際の写真には影響しません。"
     }
     func reload() {
-        guard !deleting, !reviewing else { pendingRefresh = true; return }
+        guard !deleting, !reviewing, !mediaBusy else { pendingRefresh = true; return }
         cancelMeasurement(); generation = UUID(); if isDemo { selected.removeAll() }; isDemo = false
         if let data = UserDefaults.standard.data(forKey: decisionStorage), let saved = try? JSONDecoder().decode([String: SavedDecision].self, from: data) { decisions = saved } else { decisions = [:] }
         let token = generation
@@ -81,7 +90,7 @@ final class LibraryStore: NSObject, ObservableObject, PHPhotoLibraryChangeObserv
     }
     func setDecision(_ value: VideoDecision, for record: VideoRecord, days: Int = 7) {
         decisions[record.id] = value == .none ? nil : SavedDecision(value: value, due: value == .later ? Date().addingTimeInterval(Double(days) * 86400) : nil)
-        if value == .keep { selected.remove(record.id) }
+        if value == .keep || value == .later { selected.remove(record.id) }
         if !isDemo, let data = try? JSONEncoder().encode(decisions) { UserDefaults.standard.set(data, forKey: decisionStorage) }
     }
     func cancelMeasurement() { measurementID = UUID(); measureTask?.cancel(); measureTask = nil; measuring = false }
@@ -124,6 +133,50 @@ final class LibraryStore: NSObject, ObservableObject, PHPhotoLibraryChangeObserv
             PHImageManager.default().requestPlayerItem(forVideo: asset, options: options) { item, _ in continuation.resume(returning: item) }
         }
         if let item { player = AVPlayer(playerItem: item) } else { message = "この端末にない動画は再生できません。写真アプリで取得してから再度お試しください。" }
+    }
+    func clearExport() {
+        guard !mediaBusy else { return }
+        exportResult = nil; exportSaved = false
+        if let url = temporaryExport { try? FileManager.default.removeItem(at: url) }
+        temporaryExport = nil
+    }
+    func cancelExport() {
+        exportCancelled = true
+        if let id = mediaRequest { PHImageManager.default().cancelImageRequest(id) }
+        exportOperation?.cancel()
+    }
+    func prepareExport(_ row: VideoRecord, quality: ExportQuality, allowNetwork: Bool) async {
+        guard !isDemo, !mediaBusy, !deleting else { exportMessage = "実際の動画を写真ライブラリから選んでください。"; return }
+        clearExport(); cancelMeasurement(); mediaBusy = true; exportCancelled = false
+        exportMessage = allowNetwork ? "必要な場合はiCloudから取得してコピーを作ります…" : "この端末の動画からコピーを作ります…"
+        defer { mediaBusy = false; mediaRequest = nil; exportOperation = nil }
+        do {
+            guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [row.id], options: nil).firstObject else { throw NSError(domain: "RecSort", code: 10, userInfo: [NSLocalizedDescriptionKey: "元動画が見つかりません"]) }
+            let options = PHVideoRequestOptions(); options.isNetworkAccessAllowed = allowNetwork; options.version = .original
+            let avAsset: AVAsset? = await withCheckedContinuation { continuation in
+                mediaRequest = PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { value, _, _ in continuation.resume(returning: value) }
+            }
+            if exportCancelled { throw CancellationError() }
+            guard let avAsset else { throw NSError(domain: "RecSort", code: 11, userInfo: [NSLocalizedDescriptionKey: "動画を取得できませんでした。iCloudの動画なら、取得を許可するか写真アプリでダウンロードしてください。"]) }
+            let before = (avAsset as? AVURLAsset).flatMap { try? $0.url.resourceValues(forKeys: [.fileSizeKey]).fileSize }.map(Int64.init) ?? row.bytes
+            let operation = VideoExportOperation(); exportOperation = operation
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("RecSortExports", isDirectory: true)
+            let result = try await operation.run(asset: avAsset, quality: quality, prefix: URL(fileURLWithPath: row.name).deletingPathExtension().lastPathComponent, directory: directory, before: before)
+            if exportCancelled { try? FileManager.default.removeItem(at: result.url); throw CancellationError() }
+            temporaryExport = result.url; exportResult = result
+            if quality == .copy { exportMessage = "コピーを作りました。元動画は残っています。保存先で再生を確認してください。" }
+            else if let before, result.after >= before { exportMessage = "元動画より小さくなりませんでした。元動画は変更していません。" }
+            else { exportMessage = "小さいコピーを作りました。元動画は残っています。画質・音声・向きを確認してください。" }
+        } catch { exportMessage = exportCancelled || error is CancellationError ? "中止しました。元動画は変更していません。" : error.localizedDescription }
+    }
+    func saveExportToPhotos() async {
+        guard let result = exportResult, !mediaBusy, !exportSaved else { return }
+        mediaBusy = true; savingExport = true; defer { mediaBusy = false; savingExport = false }
+        do {
+            try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: result.url) }
+            exportSaved = true; pendingRefresh = true
+            exportMessage = "コピーを写真へ保存しました。元動画も残っています。コピーの再生確認後に、必要なら別操作で元動画を整理してください。"
+        } catch { exportMessage = "写真へ保存できませんでした：" + error.localizedDescription }
     }
     func deleteReviewed(_ snapshot: [VideoRecord]) async {
         guard !deleting, !snapshot.isEmpty else { return }

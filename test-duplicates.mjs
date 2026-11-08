@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {findDuplicates,sameFileBytes,duplicateCopies} from './dist/duplicates.mjs';
+import {setDecision} from './dist/decisions.mjs';
+const record=(name,bytes)=>({id:name,name,path:name,modified:1,size:bytes.length,file:new Blob([bytes])});
+const a=record('a.mp4',new Uint8Array([1,2,3])),b=record('b.mp4',new Uint8Array([1,2,3])),c=record('c.mp4',new Uint8Array([1,2,4]));
+assert.equal(await sameFileBytes(a.file,b.file),true);
+assert.equal(await sameFileBytes(a.file,c.file),false);
+const result=await findDuplicates([a,b,c]);assert.equal(result.groups.length,1);assert.equal(result.groups[0].length,2);
+assert.deepEqual(duplicateCopies(result.groups).map(r=>r.id),['b.mp4']);
+assert.deepEqual(duplicateCopies(result.groups,setDecision(b,{},'keep')).map(r=>r.id),['a.mp4']);
+const first=new Uint8Array(300000),second=new Uint8Array(300000);second[150000]=1;
+assert.equal((await findDuplicates([record('x',first),record('y',second)])).groups.length,0);
+const abort=new AbortController();abort.abort();await assert.rejects(()=>findDuplicates([a,b],{signal:abort.signal}),{name:'AbortError'});
+assert.equal((await findDuplicates([{...a,file:null}])).groups.length,0);
+console.log('9 duplicate assertions passed, including full comparison after matching fingerprints');

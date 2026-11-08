@@ -1,3 +1,5 @@
+import {findDuplicates,duplicateCopies} from './duplicates.mjs';
+import {canCompress,compressVideo as encodeVideo,compressionSummary} from './media-tools.mjs';
 import {readReviewDates,reviewDue,nextFive,makeSnapshot,readSnapshot,storedFolder} from './workflow.mjs';
 import {isVideo,reasons,formatSize,makeCSV,demoRecords} from './core.mjs';
 import {decisionKey,getDecision,canSelect,readDecisions,setDecision} from './decisions.mjs';
@@ -20,6 +22,8 @@ const chosenRecords=()=>records.filter(r=>selected.has(r.id)&&selectable(r));
 function saveDecisions(){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(savedDecisions));storageOK=true;}catch{storageOK=false;}}
 function showToast(message,allowUndo=true){clearTimeout(toastTimer);$('toastText').textContent=message;$('undoButton').hidden=!allowUndo;$('toast').hidden=false;toastTimer=setTimeout(()=>{$('toast').hidden=true;},8000);}
 
+let duplicateGroups=[],duplicateAbort=null;
+function clearDuplicateResults(){duplicateGroups=[];for(const r of records)delete r.exactDuplicateGroup;$('duplicateGroups').replaceChildren();$('duplicateStatus').textContent='同じ容量の動画を端末内で読み比べます。見た目が似た動画は判定しません。';}
 let accessRoot=null,deleteBusy=false,scanBusy=false,deleteAbort=null,reviewRecords=[];
 let records=[],selected=new Set(),mode='empty',matching=[],visible=[],previewURL=null,exportURL=null,loadSequence=0;
 const units=n=>formatSize(n).join(' ');
@@ -30,7 +34,7 @@ function updateSelection(){
   const chosen=chosenRecords();
   $('selectedCount').textContent=`${chosen.length} 件を選択`;
   $('selectedSize').textContent=`合計 ${units(chosen.reduce((s,r)=>s+r.size,0))}`;
-  $('reviewButton').disabled=!chosen.length;
+  $('reviewButton').disabled=!chosen.length||scanBusy;
   $('clearSelection').disabled=!chosen.length;
   const eligible=visible.filter(selectable);
   $('selectAll').disabled=!eligible.length;
@@ -41,6 +45,7 @@ function updateSelection(){
 }
 function render(){
   const [days,gb]=thresholds();
+  $('findDuplicates').disabled=scanBusy||!records.some(r=>r.file);$('selectDuplicateCopies').disabled=scanBusy||!duplicateCopies(duplicateGroups,decisions()).length;
   const candidates=records.filter(r=>isCandidate(r,days,gb));
   const due=records.filter(r=>reviewDue(r,decisions(),reviewDates()));
   $('coachTitle').textContent=due.length?`見直し時期の動画が ${due.length} 件あります。`:'まずは5本、見直そう。';
@@ -83,7 +88,7 @@ function render(){
     const check=element('td',undefined,'check-cell');check.append(checkbox);tr.append(check);
     const nameCell=element('td');const nameWrap=element('button',undefined,'filename filename-button');nameWrap.setAttribute('aria-label',r.name+'の詳細');nameWrap.addEventListener('click',()=>preview(r));const info=element('div');info.append(element('div',r.name,'file-name'),element('span',r.path.substring(0,r.path.lastIndexOf('/'))||'選択した動画','file-meta'));nameWrap.append(element('span','▷','file-icon'),info);nameCell.append(nameWrap);nameCell.title=r.path;tr.append(nameCell);
     tr.append(element('td',units(r.size),'size-cell'),element('td',new Date(r.modified).toLocaleDateString('ja-JP')+' '+new Date(r.modified).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}),'date-cell'));
-    const reasonCell=element('td');const why=reasons(r,days,gb);
+    const reasonCell=element('td');const why=reasons(r,days,gb);if(r.exactDuplicateGroup)why.push('完全一致 '+r.exactDuplicateGroup);
     if(decision(r)==='keep')reasonCell.append(element('span','♡ 残す・候補から除外','reason kept'));
     else{if(decision(r)==='later'){const due=reviewDates()[decisionKey(r)];reasonCell.append(element('span',reviewDue(r,decisions(),reviewDates())?'◷ 見直し時期':`◷ ${new Date(due).toLocaleDateString('ja-JP')}に見直す`,'reason later'));}if(why.length)why.forEach(reason=>reasonCell.append(element('span',reason,'reason')));else if(decision(r)!=='later')reasonCell.append(element('span','—','no-reason'));}tr.append(reasonCell);
     const action=element('td');const play=element('button','詳細 ↗','play-button');play.setAttribute('aria-label',r.name+'の詳細を開く');play.title='プレビューと整理の判断';play.addEventListener('click',()=>preview(r));action.append(play);tr.append(action);fragment.append(tr);
@@ -95,9 +100,9 @@ function render(){
   $('modeBadge').textContent=mode==='demo'?'DEMO':mode==='local'?'LOCAL':mode==='snapshot'?'保存一覧':'未選択';$('modeBadge').classList.toggle('demo',mode==='demo');updateSelection();
 }
 function resetFilters(){selected.clear();$('sort').value='size-desc';$('search').value='';view='all';page=0;undo=null;$('toast').hidden=true;}
-function loadDemo(){if(deleteBusy||scanBusy)return;accessRoot=null;loadSequence++;records=demoRecords(1793664000000);mode='demo';resetFilters();$('folderLabel').textContent='サンプル録画 / 6件の架空のライブラリ';$('status').textContent='デモモード：実ファイルはありません。候補の条件変更や整理リストの保存を試せます。';render();}
+function loadDemo(){if(deleteBusy||scanBusy)return;accessRoot=null;clearDuplicateResults();loadSequence++;records=demoRecords(1793664000000);mode='demo';resetFilters();$('folderLabel').textContent='サンプル録画 / 6件の架空のライブラリ';$('status').textContent='デモモード：実ファイルはありません。候補の条件変更や整理リストの保存を試せます。';render();}
 async function loadFiles(files,source='files'){
-  if(deleteBusy||scanBusy)return;accessRoot=null;const sequence=++loadSequence;let list=Array.from(files);if(!list.length)return;
+  if(deleteBusy||scanBusy)return;accessRoot=null;clearDuplicateResults();const sequence=++loadSequence;let list=Array.from(files);if(!list.length)return;
   $('status').textContent='ファイル情報を読み込み中…';
   await new Promise(resolve=>setTimeout(resolve,0));
   let next=[];let skipped=0;
@@ -152,6 +157,8 @@ function preview(record){
   const dl=$('previewDetails');dl.replaceChildren();
   for(const [label,value] of [['ファイル',record.path],['容量',units(record.size)],['最終更新',new Date(record.modified).toLocaleString('ja-JP')],['形式',record.file?.type||record.name.split('.').pop().toUpperCase()]])dl.append(element('dt',label),element('dd',value));
   $('previewReasons').replaceChildren(...reasons(record,...thresholds()).map(reason=>element('span',reason,'reason')));
+  for(const id of ['copyVideo','shareVideo','compressVideo'])$(id).disabled=!record.file;
+  $('compressVideo').disabled=!record.file||!canCompress();$('mediaHint').textContent=!record.file?'元動画を選び直すとコピー保存・共有・圧縮ができます。':canCompress()?'コピーを作っても元動画は消えません。保存先で再生を確認してください。':'この環境では圧縮に対応しません。コピー保存または共有をご利用ください。';
   updateInspector();$('previewDialog').showModal();
 }
 function updateInspector(){
@@ -195,7 +202,7 @@ async function loadAccessRoot(root){
   $('status').textContent='フォルダの動画情報を読み込み中…';
   const next=await scanDirectory(root,isVideo,{onProgress:n=>{if(n%50===0)$('status').textContent=`動画 ${n} 件を読み込み中…`;}});
   if(sequence!==loadSequence)return;
-  records=next.records;mode='local';accessRoot=root;resetFilters();
+  clearDuplicateResults();records=next.records;mode='local';accessRoot=root;resetFilters();
   $('folderLabel').textContent=root.name+' / PC削除対応フォルダ';
   $('status').textContent=`動画 ${records.length} 件を読み込みました。読めなかった動画 ${next.skipped} 件。削除時には書き込み許可と最終確認が必要です。`;
   render();
@@ -242,7 +249,7 @@ $('deleteButton').addEventListener('click',async()=>{
 $('nextFive').addEventListener('click',()=>{selected=new Set(nextFive(matching,decisions(),reviewDates(),r=>isCandidate(r,...thresholds())).map(r=>r.id));render();$('status').textContent=`${selected.size} 件を選びました。選択は削除ではありません。内容を確認し、残す・保留・整理を判断してください。`;});
 $('dueReview').addEventListener('click',()=>{view='due';page=0;$('sort').value='date-asc';render();$('status').textContent='見直し時期になった動画だけを表示しています。';});
 $('saveList').addEventListener('click',()=>{if(mode==='demo'||!records.length)return;try{const raw=makeSnapshot(records,$('folderLabel').textContent);localStorage.setItem(SNAPSHOT_KEY,raw);lastSnapshot=readSnapshot(raw);render();$('status').textContent='名前・容量・日時をこのブラウザに保存しました。動画本体は保存していません。';}catch{$('status').textContent='一覧を保存できませんでした。保存領域やブラウザの設定を確認してください。';}});
-$('restoreList').addEventListener('click',()=>{if(!lastSnapshot||deleteBusy||scanBusy)return;loadSequence++;accessRoot=null;mode='snapshot';records=lastSnapshot.records.map(r=>({...r}));resetFilters();$('folderLabel').textContent=lastSnapshot.label+' / '+new Date(lastSnapshot.saved).toLocaleString('ja-JP')+'時点';$('status').textContent='保存した一覧です。実際のファイルの有無や容量は再確認していません。動画を選び直すと再生・実ファイルの操作ができます。';render();});
+$('restoreList').addEventListener('click',()=>{if(!lastSnapshot||deleteBusy||scanBusy)return;loadSequence++;accessRoot=null;clearDuplicateResults();mode='snapshot';records=lastSnapshot.records.map(r=>({...r}));resetFilters();$('folderLabel').textContent=lastSnapshot.label+' / '+new Date(lastSnapshot.saved).toLocaleString('ja-JP')+'時点';$('status').textContent='保存した一覧です。実際のファイルの有無や容量は再確認していません。動画を選び直すと再生・実ファイルの操作ができます。';render();});
 $('forgetList').addEventListener('click',()=>{try{localStorage.removeItem(SNAPSHOT_KEY);lastSnapshot=null;render();$('status').textContent='保存した一覧を消しました。元動画と「残す・保留」の判断は変更していません。';}catch{$('status').textContent='保存した一覧を消せませんでした。ブラウザのサイトデータ設定を確認してください。';}});
 $('rememberFolder').addEventListener('click',async()=>{if(!accessRoot)return;try{await storedFolder('put',accessRoot);rememberedRoot=accessRoot;$('reopenFolder').hidden=false;render();$('status').textContent='このブラウザにフォルダの参照を保存しました。次回は「前回のフォルダを開く」から再許可して読み込めます。';}catch{$('status').textContent='この環境ではフォルダを記憶できません。一覧の保存または通常の選択をご利用ください。';}});
 $('reopenFolder').addEventListener('click',async()=>{if(!rememberedRoot||deleteBusy||scanBusy)return;try{if(await rememberedRoot.requestPermission({mode:'read'})!=='granted'){$('status').textContent='読み込みを許可しなかったため、フォルダは開いていません。';return;}await loadAccessRoot(rememberedRoot);}catch{$('status').textContent='前回のフォルダを開けません。移動・削除や許可の変更を確認し、フォルダを選び直してください。';}});
@@ -250,3 +257,51 @@ $('forgetFolder').addEventListener('click',async()=>{try{await storedFolder('cle
 if(accessSupported)storedFolder('get').then(root=>{if(root){rememberedRoot=root;$('reopenFolder').hidden=false;$('forgetFolder').hidden=false;}}).catch(()=>{});
 $('guideButton').addEventListener('click',()=>$('guideDialog').showModal());
 $('downloadFeedback').addEventListener('click',()=>{const text='RecSort 利用メモ（未送信）\n\n整理できない理由：\n'+$('researchReason').value+'\n\n圧縮・クラウドを使わない理由：\n'+$('researchAlternative').value+'\n\n改善・有料利用の条件：\n'+$('researchValue').value;const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='RecSort-feedback.txt';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);});
+
+let compressionRecord=null,compressionAbort=null,compressionBusy=false,compressedFile=null,compressedURL=null;
+function downloadFile(file,name=file.name){const url=URL.createObjectURL(file),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+async function shareFile(file){
+ if(!navigator.canShare?.({files:[file]})||!navigator.share){downloadFile(file);return 'この環境ではファイル共有に対応しないため、コピー保存に切り替えました。';}
+ await navigator.share({files:[file],title:'RecSortの動画コピー'});return '共有画面を閉じました。保存先でコピーと再生を確認してください。元動画は残っています。';
+}
+$('copyVideo').addEventListener('click',()=>{if(activeRecord?.file){downloadFile(activeRecord.file);$('mediaHint').textContent='コピー保存を開始しました。保存先で確認してください。元動画は変更していません。';}});
+$('shareVideo').addEventListener('click',async()=>{if(!activeRecord?.file)return;try{$('mediaHint').textContent=await shareFile(activeRecord.file);}catch(error){$('mediaHint').textContent=error.name==='AbortError'?'共有をキャンセルしました。元動画は残っています。':'共有できませんでした。コピー保存をご利用ください。';}});
+$('compressVideo').addEventListener('click',()=>{
+ if(!activeRecord?.file||compressionBusy)return;compressionRecord=activeRecord;$('previewDialog').close();
+ if(compressedURL){URL.revokeObjectURL(compressedURL);compressedURL=null;}compressedFile=null;$('compressedPreview').hidden=true;$('compressedPreview').removeAttribute('src');
+ $('compressionName').textContent=compressionRecord.name+' / '+units(compressionRecord.size);$('compressionStatus').textContent='別のコピーを作ります。元動画の削除や上書きは行いません。';$('compressionProgress').value=0;
+ $('directSaveLabel').hidden=typeof window.showSaveFilePicker!=='function';$('directSave').checked=false;$('downloadCompressed').disabled=true;$('shareCompressed').disabled=true;$('compressionDialog').showModal();
+});
+$('compressionDialog').addEventListener('cancel',e=>{if(compressionBusy){e.preventDefault();compressionAbort?.abort();}});
+$('compressionDialog').querySelector('[data-close]').addEventListener('click',e=>{if(compressionBusy){e.stopImmediatePropagation();compressionAbort?.abort();}} ,true);
+$('cancelCompression').addEventListener('click',()=>compressionAbort?.abort());
+$('startCompression').addEventListener('click',async()=>{
+ if(compressionBusy||!compressionRecord?.file)return;compressionBusy=true;compressionAbort=new AbortController();
+ if(compressedURL){URL.revokeObjectURL(compressedURL);compressedURL=null;}compressedFile=null;$('compressedPreview').pause();$('compressedPreview').hidden=true;$('compressedPreview').removeAttribute('src');
+ for(const id of ['startCompression','compressionQuality','directSave','downloadCompressed','shareCompressed'])$(id).disabled=true;$('cancelCompression').disabled=false;
+ const close=$('compressionDialog').querySelector('[data-close]');close.disabled=true;
+ const previous=$('compressionVideo'),video=document.createElement('video');video.id='compressionVideo';video.playsInline=true;video.hidden=false;previous.replaceWith(video);
+ $('compressionStatus').textContent='動画を準備しています…';
+ try{
+  const result=await encodeVideo(compressionRecord.file,{video,maxEdge:Number($('compressionQuality').value),bitrate:$('compressionQuality').value==='960'?1000000:1800000,direct:$('directSave').checked,sourceHandle:compressionRecord.handle,signal:compressionAbort.signal,onProgress:(p,t,d)=>{$('compressionProgress').value=p;$('compressionStatus').textContent=`変換中 ${Math.round(p*100)}%（${Math.floor(t)} / ${Math.ceil(d)}秒）`;}});
+  compressedFile=result.file;if(compressedURL)URL.revokeObjectURL(compressedURL);compressedURL=URL.createObjectURL(result.file);$('compressedPreview').src=compressedURL;$('compressedPreview').hidden=false;
+  $('compressionStatus').textContent=`${units(compressionRecord.size)} → ${units(result.file.size)}。${compressionSummary(compressionRecord.size,result.file.size)}${result.direct?' 選んだ保存先へ書き出しました。':' 保存して再生を確認してください。'}`;
+  $('downloadCompressed').disabled=false;$('shareCompressed').disabled=false;
+ }catch(error){$('compressionStatus').textContent=error.name==='AbortError'?'圧縮を中止しました。元動画は変更していません。':error.message||'圧縮できませんでした。元動画は変更していません。';}
+ finally{$('compressionVideo').hidden=true;compressionBusy=false;$('startCompression').disabled=false;$('compressionQuality').disabled=false;$('directSave').disabled=false;$('cancelCompression').disabled=true;close.disabled=false;}
+});
+$('downloadCompressed').addEventListener('click',()=>{if(compressedFile)downloadFile(compressedFile);});
+$('shareCompressed').addEventListener('click',async()=>{if(!compressedFile)return;try{$('compressionStatus').textContent=await shareFile(compressedFile);}catch(error){$('compressionStatus').textContent=error.name==='AbortError'?'共有をキャンセルしました。元動画は残っています。':'共有できませんでした。コピー保存をご利用ください。';}});
+$('compressionDialog').addEventListener('close',()=>{$('compressedPreview').pause();$('compressedPreview').removeAttribute('src');if(compressedURL){URL.revokeObjectURL(compressedURL);compressedURL=null;}compressedFile=null;});
+
+$('findDuplicates').addEventListener('click',async()=>{
+ if(scanBusy||deleteBusy||compressionBusy)return;scanBusy=true;duplicateAbort=new AbortController();duplicateGroups=[];sourceBusy(true);render();$('cancelDuplicates').hidden=false;
+ $('duplicateStatus').textContent='動画のバイト列を照合中…大きい動画は時間がかかります。';
+ try{const result=await findDuplicates(records,{signal:duplicateAbort.signal,onProgress:(n,total)=>{$('duplicateStatus').textContent=`照合準備 ${n} / ${total} 件。元動画は変更しません。`;}});duplicateGroups=result.groups;for(const [i,group] of duplicateGroups.entries())for(const r of group)r.exactDuplicateGroup=`組${i+1}`;
+  $('duplicateStatus').textContent=`完全一致 ${result.groups.length} 組 / 読めない・実データなし等 ${result.skipped} 件。各組から少なくとも1本を選択せずに残します。`;
+  const fragment=document.createDocumentFragment();for(const group of result.groups){const details=element('details'),summary=element('summary',`${group.length} 本 / 1本 ${units(group[0].size)} / ${group[0].name}`);details.append(summary);for(const r of group.slice(0,30))details.append(element('p',r.path));if(group.length>30)details.append(element('p',`ほか ${group.length-30} 本。選択後の確認画面・CSVで全件を確認できます。`));fragment.append(details);}$('duplicateGroups').replaceChildren(fragment);
+ }catch(error){$('duplicateStatus').textContent=error.name==='AbortError'?'照合を中止しました。元動画は変更していません。':error.message||'照合できませんでした。';}
+ finally{scanBusy=false;sourceBusy(false);$('cancelDuplicates').hidden=true;render();}
+});
+$('cancelDuplicates').addEventListener('click',()=>duplicateAbort?.abort());
+$('selectDuplicateCopies').addEventListener('click',()=>{selected=new Set(duplicateCopies(duplicateGroups,decisions()).filter(r=>records.includes(r)&&selectable(r)).map(r=>r.id));render();$('status').textContent=`重複のコピー ${selected.size} 件を選びました。各組1本以上と「残す」の動画は選択していません。削除・保存前に内容を確認してください。`;});

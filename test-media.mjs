@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {fitDimensions,outputName,recordingType,compressionSummary,MAX_MEMORY_OUTPUT} from './dist/media-tools.mjs';
+assert.deepEqual(fitDimensions(1920,1080),{width:1280,height:720});
+assert.deepEqual(fitDimensions(1080,1920,960),{width:540,height:960});
+assert.deepEqual(fitDimensions(320,180),{width:320,height:180});
+assert.throws(()=>fitDimensions(0,0));
+assert.equal(outputName('a/b.mov','webm'),'RecSort-small-a_b.webm');
+assert.equal(recordingType({isTypeSupported:t=>t==='video/webm'}),'video/webm');
+assert.equal(recordingType({isTypeSupported:()=>false}),null);
+assert.ok(compressionSummary(100,50).includes('50%'));
+assert.ok(compressionSummary(100,110).includes('小さくなりません'));
+assert.equal(MAX_MEMORY_OUTPUT,128*1024*1024);
+console.log('10 media assertions passed');

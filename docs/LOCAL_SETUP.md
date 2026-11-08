@@ -3,6 +3,8 @@
 通常の利用と実演は[公開サイト](https://recsort-studio.alikemerit.chatgpt.site/)から行います。
 以下は先生がダウンロードしたソースを手元で確認する場合の補足です。
 
+2026年11月8日のmainのWebソースはv0.6.0開発版で、公開サイトv0.5.0より先の機能を含みます。iPhone試作は別の[Mac / Xcode起動手順](../native/RecSort-iOS/README.md)に従ってください。学校提出版v0.3.3は`dist/school-demo/`に保持しています。
+
 ## ローカル起動に必要な環境
 
 - Python 3.12以降を推奨（ローカル配信用。今回の起動確認は3.12.14）
