@@ -4,7 +4,9 @@
 
 約3分48秒／1920×1080／30fps
 
-動画本体は別途共有する成果物です。この文書は構成と台本を掲載しています。初期の提出用PDFはv0.3.3の説明で、本動画とは対象版が異なります。
+[紹介動画を保存する（MP4・約3分48秒）](https://github.com/nookstudiojp/recsort/raw/refs/heads/main/docs/media/RecSort-introduction.mp4)
+
+動画本体をこのリポジトリに掲載しています。この文書は構成と台本を掲載しています。初期の提出用PDFはv0.3.3の説明で、本動画とは対象版が異なります。
 
 声：VOICEVOX:四国めたん。BGM：Nook Studioオリジナル。
 公開Web版と未公開の開発版、iOS試作を明記。実画面の静止キャプチャにカメラ移動を加えた構成です。
