@@ -20,9 +20,9 @@
 
 ## 紹介動画（記録・参考用）
 
-### [紹介動画を保存する（MP4・約3分48秒）](https://github.com/nookstudiojp/recsort/raw/refs/heads/main/docs/media/RecSort-introduction.mp4)
+https://github.com/user-attachments/assets/226421c9-3f99-4d50-9801-ca398f4b825d
 
-公開Web版・開発中の追加機能・iPhone試作を紹介しています。1080p、約9MB。声はVOICEVOX:四国めたん、BGMはNook Studioオリジナルです。
+公開Web版・開発中の追加機能・iPhone試作を紹介しています。約3分48秒。声はVOICEVOX:四国めたん、BGMはNook Studioオリジナルです。
 
 [動画の構成と台本](docs/RecSort-presentation-script.md)
 
