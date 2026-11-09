@@ -24,7 +24,6 @@ https://github.com/user-attachments/assets/226421c9-3f99-4d50-9801-ca398f4b825d
 
 公開Web版・開発中の追加機能・iPhone試作を紹介しています。約3分48秒。声はVOICEVOX:四国めたん、BGMはNook Studioオリジナルです。
 
-[動画の構成と台本](docs/RecSort-presentation-script.md)
 
 ## 必要な資料を探す
 
