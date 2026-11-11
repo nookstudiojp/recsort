@@ -6,7 +6,7 @@
 
 ### [説明用スライドを開く（PDF）](docs/RecSort-slides.pdf)
 
-**本編は1〜6ページ。7〜10ページは質問用です。** 11月9日の当日改訂版を掲載しています。
+**本編は1〜6ページ。7〜10ページは質問用です。** 11月9日改訂の本人説明・実演用を掲載しています。
 
 [PDFをダウンロードする](https://github.com/nookstudiojp/recsort/raw/refs/heads/main/docs/RecSort-slides.pdf) — GitHubのPDF表示が使いにくい場合は、保存してPDFアプリで開いてください。
 
@@ -20,7 +20,7 @@
 
 ## 紹介動画（記録・参考用）
 
-https://github.com/user-attachments/assets/226421c9-3f99-4d50-9801-ca398f4b825d
+<video controls src="https://raw.githubusercontent.com/nookstudiojp/recsort/main/docs/media/RecSort-introduction.mp4"></video>
 
 公開Web版・開発中の追加機能・iPhone試作を紹介しています。約3分48秒。声はVOICEVOX:四国めたん、BGMはNook Studioオリジナルです。
 
