@@ -20,7 +20,7 @@
 
 ## 紹介動画（記録・参考用）
 
-<video controls src="https://raw.githubusercontent.com/nookstudiojp/recsort/main/docs/media/RecSort-introduction.mp4"></video>
+https://github.com/user-attachments/assets/226421c9-3f99-4d50-9801-ca398f4b825d
 
 公開Web版・開発中の追加機能・iPhone試作を紹介しています。約3分48秒。声はVOICEVOX:四国めたん、BGMはNook Studioオリジナルです。
 
